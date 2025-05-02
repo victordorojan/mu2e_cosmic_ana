@@ -1,3 +1,5 @@
+# from cut_manager import CutManager
+
 import json
 import awkward as ak
 
@@ -100,7 +102,7 @@ class CutManager:
         
         return combined
     
-    def calculate_cut_stats(self, data, progressive=True):
+    def calculate_cut_stats(self, data, progressive=True, active_only=False):
         """ Utility to calculate stats for each cut.
         
         Args:
@@ -113,18 +115,21 @@ class CutManager:
         # Base statistics (no cuts)
         stats.append({
             "name": "No cuts",
+            "active": "N/A",
             "description": "No selection applied",
             "events_passing": total_events,
             "absolute_frac": 100.0,
             "relative_frac": 100.0
         })
         
-        # Get active cuts 
-        active_cuts = [name for name in self.cuts.keys() if self.cuts[name]["active"]]
+        # Get cuts 
+        cuts = [name for name in self.cuts.keys()] 
+        if active_only: 
+            cuts = [name for name in self.cuts.keys() if self.cuts[name]["active"]]
         
         previous_mask = None
         
-        for name in active_cuts:
+        for name in cuts:
             cut_info = self.cuts[name]
             mask = cut_info["mask"]
             
@@ -144,6 +149,7 @@ class CutManager:
             
             stats.append({
                 "name": name,
+                "active": cut_info["active"],
                 "description": cut_info["description"],
                 "mask": current_mask,
                 "events_passing": int(events_passing),
@@ -157,27 +163,28 @@ class CutManager:
         
         return stats
     
-    def print_cut_stats(self, data, progressive=True):
+    def print_cut_stats(self, data, progressive=True, active_only=False):
         """ Print cut statistics for each cut.
         
         Args:
             data (awkward.Array): Data array
             progressive (bool, optional): If True, apply cuts progressively; if False, apply each cut independently
         """
-        stats = self.calculate_cut_stats(data, progressive)
+        stats = self.calculate_cut_stats(data, progressive, active_only)
         
         # Print header
         print(f"\n{self.print_prefix}Cut Info:")
         print("-" * 110)
-        header = "{:<20} {:<20} {:<20} {:<20} {:<30}".format(
-            "Cut", "Events Passing", "Absolute Frac. [%]", "Relative Frac. [%]", "Description")
+        header = "{:<20} {:<10} {:<20} {:<20} {:<20} {:<30}".format(
+            "Cut", "Active", "Events Passing", "Absolute Frac. [%]", "Relative Frac. [%]", "Description")
         print(header)
         print("-" * 110)
         
         # Print each cut's statistics
         for stat in stats:
-            row = "{:<20} {:<20} {:<20.2f} {:<20.2f} {:<30}".format(
+            row = "{:<20} {:<10} {:<20} {:<20.2f} {:<20.2f} {:<30}".format(
                 stat["name"], 
+                stat["active"],
                 stat["events_passing"], 
                 stat["absolute_frac"], 
                 stat["relative_frac"], 
