@@ -2,6 +2,7 @@
 
 import json
 import awkward as ak
+import csv
 
 # Can move this into pyselect
 class CutManager:
@@ -172,7 +173,7 @@ class CutManager:
         
         return stats
     
-    def print_cut_stats(self, data=None, stats=None, progressive=True, active_only=False):
+    def print_cut_stats(self, data=None, stats=None, progressive=True, active_only=False, csv_name=None):
         """ Print cut statistics for each cut.
         
         Args:
@@ -188,7 +189,8 @@ class CutManager:
 
         if not stats:
             stats = self.calculate_cut_stats(data, progressive, active_only)
-        
+
+
         # Print header
         print(f"\n{self.print_prefix}Cut Info:")
         print("-" * 110)
@@ -196,7 +198,6 @@ class CutManager:
             "Cut", "Active", "Events Passing", "Absolute Frac. [%]", "Relative Frac. [%]", "Description")
         print(header)
         print("-" * 110)
-        
         # Print each cut's statistics
         for stat in stats:
             row = "{:<20} {:<10} {:<20} {:<20.2f} {:<20.2f} {:<30}".format(
@@ -207,7 +208,6 @@ class CutManager:
                 stat["relative_frac"], 
                 stat["description"])
             print(row)
-            
         print("-" * 110)
         
         # Print final statistics
@@ -217,7 +217,33 @@ class CutManager:
             overall_eff = last_events / first_events * 100 if first_events > 0 else 0
             
             self._log(f"Summary: {last_events}/{first_events} events remaining ({overall_eff:.2f}%)", level=0)
-    
+
+        # Write to CSV if requested
+        if csv_name:
+            try:
+                with open(csv_name, 'w', newline='') as csv_file:
+                    # Create a CSV writer
+                    writer = csv.writer(csv_file)
+                    
+                    # Write header
+                    writer.writerow(['Cut', 'Active', 'Events Passing', 'Absolute Frac. [%]', 'Relative Frac. [%]', 'Description'])
+                    
+                    # Write data rows
+                    for stat in stats:
+                        writer.writerow([
+                            stat["name"],
+                            stat["active"],
+                            stat["events_passing"],
+                            f"{stat['absolute_frac']:.2f}",
+                            f"{stat['relative_frac']:.2f}",
+                            stat["description"]
+                        ])
+                    
+                    self._log(f"Cut statistics written to {csv_name}", level=1)
+
+            except Exception as e:
+                self._log(f"Error writing cut statistics to CSV: {e}", level=0)
+                
     def save_cuts(self, file_name):
         """ Save the current cut configuration to a JSON file.
         
