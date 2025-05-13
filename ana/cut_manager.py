@@ -20,6 +20,16 @@ class CutManager:
         
         # Initialise cut container
         self.cuts = {}
+
+    def _log(self, message, level=1):
+        """Print a message based on verbosity level
+        
+        Args:
+            message (str): The message to print
+            level (int): Minimum verbosity level required to print this message
+        """
+        if self.verbosity >= level:
+            print(f"{self.print_prefix}{message}")
     
     def add_cut(self, name, description, mask, active=True):
         """
@@ -42,8 +52,7 @@ class CutManager:
             "idx" : next_idx
         }
 
-        if self.verbosity >= 2:
-            print(f"{self.print_prefix}Added cut {name} with index {next_idx}")
+        self._log(f"{self.print_prefix}Added cut {name} with index {next_idx}", level=2)
         # return self
         # This would allow method chaining, could be useful maybe?
     
@@ -163,14 +172,22 @@ class CutManager:
         
         return stats
     
-    def print_cut_stats(self, data, progressive=True, active_only=False):
+    def print_cut_stats(self, data=None, stats=None, progressive=True, active_only=False):
         """ Print cut statistics for each cut.
         
         Args:
             data (awkward.Array): Data array
             progressive (bool, optional): If True, apply cuts progressively; if False, apply each cut independently
         """
-        stats = self.calculate_cut_stats(data, progressive, active_only)
+
+        # Input validation
+        sources = sum(x is not None for x in [data, stats]) 
+        if sources != 1:
+            self._log(f"Please provide exactly one of 'data' or 'stats'", level=0)
+            return None
+
+        if not stats:
+            stats = self.calculate_cut_stats(data, progressive, active_only)
         
         # Print header
         print(f"\n{self.print_prefix}Cut Info:")
@@ -199,7 +216,7 @@ class CutManager:
             last_events = stats[-1]["events_passing"]
             overall_eff = last_events / first_events * 100 if first_events > 0 else 0
             
-            print(f"{self.print_prefix}Summary: {last_events}/{first_events} events remaining ({overall_eff:.2f}%)")
+            self._log(f"Summary: {last_events}/{first_events} events remaining ({overall_eff:.2f}%)", level=0)
     
     def save_cuts(self, file_name):
         """ Save the current cut configuration to a JSON file.
@@ -221,5 +238,52 @@ class CutManager:
         with open(file_name, 'w') as f:
             json.dump(config, f, indent=2)
             
-        if self.verbosity >= 1:
-            print(f"{self.print_prefix}Saved cut configuration to {file_name}")
+        self._log(f"Saved cut configuration to {file_name}", level=1)
+
+    def combine_cut_stats(self, stats_list):
+        """Combine a list of cut statistics after multiprocessing 
+        
+        Args:
+            cut_stats_list: List of cut statistics lists from different files
+        
+        Returns:
+            list: Combined cut statistics
+        """
+        # Return empty list if no input
+        if not stats_list:
+            return []
+        
+        # Use the first list as a template
+        combined_stats = []
+        for cut in stats_list[0]:
+            # Create a copy without the mask (which we don't need)
+            cut_copy = {k: v for k, v in cut.items() if k != 'mask'}
+            # Reset the event count
+            cut_copy['events_passing'] = 0
+            combined_stats.append(cut_copy)
+        
+        # Sum up events_passing for each cut across all files
+        for stats in stats_list:
+            for i, cut in enumerate(stats):
+                if i < len(combined_stats):  # Safety check
+                    combined_stats[i]['events_passing'] += cut['events_passing']
+        
+        # Recalculate percentages
+        if combined_stats and combined_stats[0]['events_passing'] > 0:
+            total_events = combined_stats[0]['events_passing']
+            previous_events = total_events
+            
+            for i, cut in enumerate(combined_stats):
+                events = cut['events_passing']
+                
+                # Absolute percentage
+                cut['absolute_frac'] = (events / total_events) * 100.0
+                
+                # Relative percentage
+                if i == 0:  # "No cuts"
+                    cut['relative_frac'] = 100.0
+                else:
+                    prev_events = combined_stats[i-1]['events_passing']
+                    cut['relative_frac'] = (events / prev_events) * 100.0 if prev_events > 0 else 0.0
+        
+        return combined_stats
