@@ -30,7 +30,7 @@ class Analyse:
         self.on_spill = False  # Default to off-spill 
         self._log(f"Initialised with on_spill={self.on_spill}", level=1)
     
-    def _log(self, message, level=1):
+    def _log(self, message, level=1): # now depracated! 
         """Print a message based on verbosity level
         
         Args:
@@ -99,7 +99,7 @@ class Analyse:
             )
             
             # 3. Minimum hits
-            has_hits = selector.has_n_hits(data["trk"], nhits=20)
+            has_hits = selector.has_n_hits(data["trk"], n_hits=20)
             cut_manager.add_cut(
                 name="has_hits",
                 description="Minimum of 20 active hits in the tracker",
@@ -162,11 +162,22 @@ class Analyse:
                 description="Extrapolated pitch angle (0.5577350 < tan(theta_Dip) < 1.0)",
                 mask=within_pitch_angle
             )
-        
+
+            # Mark CE-like tracks 
+            # Useful for debugging 
+            data["CE_like"] = cut_manager.combine_cuts()
+            
+            cut_manager.add_cut(
+                name="CE_like",
+                description="CE-like tracks",
+                mask=data["CE_like"],
+                active=False
+            )
+            
             # 9. CRV veto: |dt| < 150 ns (dt = coinc time - track t0) 
             dt_threshold = 150  
         
-            # Get min and max track t0 times for each event
+            # Get min and max track t0 times for each track
             min_trk_time = ak.min(data["trkfit"]["trksegs"]["time"][trk_front], axis=-1)
             max_trk_time = ak.max(data["trkfit"]["trksegs"]["time"][trk_front], axis=-1)
         
@@ -196,13 +207,14 @@ class Analyse:
                 (abs(matched["track", "min_time"] - matched["coinc", "max_time"]) < dt_threshold)
             )
 
-            # Mark unvetoed events
-            data["unvetoed"] = ~veto
+            # Mark unvetoed tracks
+            # Useful for debugging 
+            data["unvetoed"] = ~veto # Is the copy needed? 
             
             cut_manager.add_cut(
                 name="unvetoed",
                 description="No veto: |dt| >= 150 ns",
-                mask=~veto
+                mask=data["unvetoed"]
             )
 
             self._log("All cuts defined successfully", level=1)
@@ -211,43 +223,42 @@ class Analyse:
             self._log(f"Error defining cuts: {e}", level=0)  # Always print errors
             raise  # Re-raise the exception
         
-    def apply_cuts(self, data, cut_manager): 
-        """Apply all defined cuts to the data
+    def apply_cuts(self, data, cut_manager): # mask): 
+        # FIXME! 
+        """Apply all trk-level mask to the data
         
         Args:
             data: Data to apply cuts to
-            cut_manager: CutManager with defined cuts
+            mask: Mask to apply 
             
         Returns:
-            dict: Data after cuts applied
+            ak.Array: Data after cuts applied
         """
         self._log("Applying cuts to data", level=1)
         
         try:
             # Make an empty container for filtered data
-            data_cut = {} 
+            data_cut = {}             
             
             # Combine cuts
             self._log("Combining cuts", level=2)
-            combined = cut_manager.combine_cuts(active_only=False) 
+            # CE_like = data["CE_like"] # .combine_cuts(active_only=True) # unvetoed is inactive
+            # unvetoed = cut_manager.combine_cuts(active_only=False) # unvetoed in inactive
+            trk_mask = cut_manager.combine_cuts(active_only=False)
             # data_cut["combined"] = combined
             
             # # Select tracks
             self._log("Selecting tracks", level=2)
-            data_cut["trk"] = data["trk"][combined]
-            data_cut["trkfit"] = data["trkfit"][combined]
-            data_cut["trkmc"] = data["trkmc"][combined]
+            data_cut["trk"] = data["trk"][trk_mask]
+            data_cut["trkfit"] = data["trkfit"][trk_mask]
+            data_cut["trkmc"] = data["trkmc"][trk_mask]
             
             # Then clean up events with no tracks after cuts
             self._log("Cleaning up events with no tracks after cuts", level=2)
-            combined = ak.any(combined, axis=-1)
-            data_cut = data[combined] 
+            evt_mask = ak.any(trk_mask, axis=-1)
+            data_cut = data[evt_mask] 
             
             self._log("Cuts applied successfully", level=1)
-
-            # if data_cut is None: 
-            #     self._log("Resulting array is None", level=2)
-            #     data_cut = ak.Array([])
             
             return data_cut
             
@@ -276,13 +287,13 @@ class Analyse:
             #### Create histogram objects:
             # Full momentum range histogram
             hist_full_range = hist.Hist(
-                hist.axis.Regular(250, 0, 250, name="momentum", label="Momentum [MeV/c]"),
-                hist.axis.StrCategory(["All events", "CE-like events"], name="selection", label="Selection")
+                hist.axis.Regular(1000, 0, 1000, name="momentum", label="Momentum [MeV/c]"),
+                hist.axis.StrCategory(["All tracks", "CE-like tracks"], name="selection", label="Selection")
             )
             # Signal region histogram (fine binning)
             hist_signal_region = hist.Hist(
                 hist.axis.Regular(13, 103.6, 104.9, name="momentum", label="Momentum [MeV/c]"),
-                hist.axis.StrCategory(["All events", "CE-like events"], name="selection", label="Selection")
+                hist.axis.StrCategory(["All tracks", "CE-like tracks"], name="selection", label="Selection")
             )
 
             # Process and fill histograms in batches
@@ -299,11 +310,11 @@ class Analyse:
                 mom_all = ak.flatten(mom_all, axis=None)
                 
             # Fill histogram for "all events"
-            hist_full_range.fill(momentum=mom_all, selection=np.full(len(mom_all), "All events"))
+            hist_full_range.fill(momentum=mom_all, selection=np.full(len(mom_all), "All tracks"))
             
             # Filter for signal region
             mom_all_sig = mom_all[(mom_all >= 103.6) & (mom_all <= 104.9)]
-            hist_signal_region.fill(momentum=mom_all_sig, selection=np.full(len(mom_all_sig), "All events"))
+            hist_signal_region.fill(momentum=mom_all_sig, selection=np.full(len(mom_all_sig), "All tracks"))
             
             # Clean up to free memory
             del mom_all, mom_all_sig, at_trkent_all
@@ -322,11 +333,11 @@ class Analyse:
                 mom_cut = ak.flatten(mom_cut, axis=None)
                 
             # Fill histogram for "CE-like events"
-            hist_full_range.fill(momentum=mom_cut, selection=np.full(len(mom_cut), "CE-like events"))
+            hist_full_range.fill(momentum=mom_cut, selection=np.full(len(mom_cut), "CE-like tracks"))
             
             # Filter for signal region
             mom_cut_sig = mom_cut[(mom_cut >= 103.6) & (mom_cut <= 104.9)]
-            hist_signal_region.fill(momentum=mom_cut_sig, selection=np.full(len(mom_cut_sig), "CE-like events"))
+            hist_signal_region.fill(momentum=mom_cut_sig, selection=np.full(len(mom_cut_sig), "CE-like tracks"))
             
             # Clean up to free memory
             del mom_cut, mom_cut_sig, at_trkent_cut
@@ -409,7 +420,10 @@ class Analyse:
             self._log("Getting cut stats", level=1)
             cut_stats = cut_manager.calculate_cut_stats(data, progressive=True)
 
-            # Apply cuts
+            # Retrieve masks
+            CE_like = data["CE_like"] # copy 
+
+            # Apply CE-like cuts
             self._log("Applying cuts", level=1)
             data_cut = self.apply_cuts(data, cut_manager)
             
