@@ -3,6 +3,7 @@
 import json
 import awkward as ak
 import csv
+from pyutils.pylogger import Logger
 
 # Can move this into pyselect
 class CutManager:
@@ -14,23 +15,13 @@ class CutManager:
         Args:
             verbosity (int, optional): Printout level (0: minimal, 1: normal, 2: detailed)
         """
-
-        # Initilaise parameters
-        self.verbosity = verbosity
-        self.print_prefix = "[pyselect] "
-        
         # Initialise cut container
         self.cuts = {}
-
-    def _log(self, message, level=1):
-        """Print a message based on verbosity level
-        
-        Args:
-            message (str): The message to print
-            level (int): Minimum verbosity level required to print this message
-        """
-        if self.verbosity >= level:
-            print(f"{self.print_prefix}{message}")
+        # Start logger
+        self.logger = Logger( 
+            verbosity=verbosity,
+            print_prefix="[CutManager]"
+        )
     
     def add_cut(self, name, description, mask, active=True):
         """
@@ -53,9 +44,9 @@ class CutManager:
             "idx" : next_idx
         }
 
-        self._log(f"{self.print_prefix}Added cut {name} with index {next_idx}", level=2)
-        # return self
-        # This would allow method chaining, could be useful maybe?
+        self.logger.log(f"Added cut {name} with index {next_idx}", "info")
+        # return self # This would allow method chaining, could be useful maybe?
+        
     
     def get_cut_mask(self, name):
         """Utility to return the Boolean mask for a specific cut.
@@ -67,7 +58,8 @@ class CutManager:
         if name in self.cuts:
             return self.cuts[name]["mask"]
         else:
-            raise ValueError(f"{self.print_prefix}Cut '{name}' not defined")
+            self.logger.log(f"Cut '{name}' not defined", "error")
+            return None 
     
     def set_active_cut(self, name, active=True):
         """Utility to set a cut as active or inactive 
@@ -79,7 +71,8 @@ class CutManager:
         if name in self.cuts:
             self.cuts[name]["active"] = active
         else:
-            raise ValueError(f"{self.print_prefix}Cut '{name}' not defined")
+            self.logger.log(f"Cut '{name}' not defined", "error")
+            return None 
             
     def get_active_cuts(self):
         """Utility to get all active cutss"""
@@ -92,6 +85,9 @@ class CutManager:
         cut_names (list, optional): List of cut names to include (if None, use all cuts)
         active_only (bool, optional): Whether to only include active cuts
         """
+
+        self.logger.log(f"Combining cuts", "max")
+        
         if cut_names is None:
             # Then use all cuts in original order
             cut_names = list(self.cuts.keys())
@@ -119,6 +115,9 @@ class CutManager:
             data (awkward.Array): Input data 
             progressive (bool, optional): If True, apply cuts progressively; if False, apply each cut independently. Default is True.
         """
+
+        self.logger.log(f"Calculating cut statistics", "max")
+        
         total_events = len(data)
         stats = []
         
@@ -181,10 +180,12 @@ class CutManager:
             progressive (bool, optional): If True, apply cuts progressively; if False, apply each cut independently
         """
 
+        self.logger.log(f"Printing cut statistics", "max")
+        
         # Input validation
         sources = sum(x is not None for x in [data, stats]) 
         if sources != 1:
-            self._log(f"Please provide exactly one of 'data' or 'stats'", level=0)
+            self.logger.log(f"Please provide exactly one of 'data' or 'stats'", "error")
             return None
 
         if not stats:
@@ -192,7 +193,7 @@ class CutManager:
 
 
         # Print header
-        print(f"\n{self.print_prefix}Cut Info:")
+        self.logger.log(f"Cut statistics", "info")
         print("-" * 110)
         header = "{:<20} {:<10} {:<20} {:<20} {:<20} {:<30}".format(
             "Cut", "Active", "Events Passing", "Absolute Frac. [%]", "Relative Frac. [%]", "Description")
@@ -216,7 +217,7 @@ class CutManager:
             last_events = stats[-1]["events_passing"]
             overall_eff = last_events / first_events * 100 if first_events > 0 else 0
             
-            self._log(f"Summary: {last_events}/{first_events} events remaining ({overall_eff:.2f}%)", level=0)
+            self.logger.log(f"Summary: {last_events}/{first_events} events remaining ({overall_eff:.2f}%)", "info")
 
         # Write to CSV if requested
         if csv_name:
@@ -239,10 +240,10 @@ class CutManager:
                             stat["description"]
                         ])
                     
-                    self._log(f"Cut statistics written to {csv_name}", level=1)
+                    self.logger.log(f"Cut statistics written to {csv_name}", "success")
 
             except Exception as e:
-                self._log(f"Error writing cut statistics to CSV: {e}", level=0)
+                self.logger.log(f"Error writing cut statistics to CSV: {e}", "error")
                 
     def save_cuts(self, file_name):
         """ Save the current cut configuration to a JSON file.
@@ -263,10 +264,10 @@ class CutManager:
         
         with open(file_name, 'w') as f:
             json.dump(config, f, indent=2)
-            
-        self._log(f"Saved cut configuration to {file_name}", level=1)
 
-    def combine_cut_stats(self, stats_list):
+        self.logger.log(f"Saved cut configuration to {file_name}", "success")
+
+    def combine_cut_stats(self, stats_list): #
         """Combine a list of cut statistics after multiprocessing 
         
         Args:
@@ -275,6 +276,9 @@ class CutManager:
         Returns:
             list: Combined cut statistics
         """
+
+        self.logger.log(f"Combining cut statisitics", "max")
+        
         # Return empty list if no input
         if not stats_list:
             return []

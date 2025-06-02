@@ -5,8 +5,9 @@ import numpy as np
 import hist
 import gc
 
-from pyselect import Select
-from pyvector import Vector
+from pyutils.pyselect import Select
+from pyutils.pyvector import Vector
+from pyutils.pylogger import Logger
 from cut_manager import CutManager
 
 class Analyse:
@@ -18,27 +19,23 @@ class Analyse:
         Args:
             verbosity (int, optional): Level of output detail (0: critical errors only, 1: info, 2: debug, 3: deep debug)
         """
+
+        # Verbosity 
         self.verbosity = verbosity
-        self.print_prefix = "[Analyse] "
+        
+        # Start logger
+        self.logger = Logger(
+            print_prefix="[Analyse]",
+            verbosity=self.verbosity
+        )
         
         # Initialise tools
-        self._log(f"Initialising selector and vector tools", level=1)
         self.selector = Select(verbosity=self.verbosity)
         self.vector = Vector(verbosity=self.verbosity) 
         
         # Analysis configuration
         self.on_spill = False  # Default to off-spill 
-        self._log(f"Initialised with on_spill={self.on_spill}", level=1)
-    
-    def _log(self, message, level=1): # now depracated! 
-        """Print a message based on verbosity level
-        
-        Args:
-            message (str): The message to print
-            level (int): Minimum verbosity level required to print this message
-        """
-        if self.verbosity >= level:
-            print(f"{self.print_prefix}{message}")
+        self.logger.log(f"Initialised with on_spill={self.on_spill}", "info")
     
     def define_cuts(self, data, cut_manager, on_spill=None):
         """Define analysis cuts
@@ -48,10 +45,11 @@ class Analyse:
             cut_manager: The CutManager instance to use
             on_spill (bool, optional): Whether to apply on-spill specific cuts
         """
-        self._log(f"Defining cuts (on_spill={on_spill if on_spill is not None else self.on_spill})", level=1)
         
         if on_spill is None:
             on_spill = self.on_spill
+
+        self.logger.log(f"Defining cuts (on_spill={on_spill})", "info")
             
         selector = self.selector
         
@@ -84,7 +82,7 @@ class Analyse:
             )
             
             # 2. Downstream tracks only through tracker
-            self._log("Defining downstream tracks cut", level=2)
+            self.logger.log("Defining downstream tracks cut", "max")
             is_downstream = selector.is_downstream(data["trkfit"])
         
              # trkseg-level definition, useful for plotting
@@ -108,7 +106,7 @@ class Analyse:
         
             if on_spill:
                 # 4. Time at tracker entrance (trk level)
-                self._log("Defining time cut (on-spill specific)", level=2)
+                self.logger.log("Defining time cut (on-spill specific)", "info")
                 within_t0 = ((640 < data["trkfit"]["trksegs"]["time"]) & 
                              (data["trkfit"]["trksegs"]["time"] < 1650))
             
@@ -167,12 +165,12 @@ class Analyse:
             # Useful for debugging 
             data["CE_like"] = cut_manager.combine_cuts()
             
-            cut_manager.add_cut(
-                name="CE_like",
-                description="CE-like tracks",
-                mask=data["CE_like"],
-                active=False
-            )
+            # cut_manager.add_cut(
+            #     name="CE_like",
+            #     description="CE-like tracks",
+            #     mask=data["CE_like"],
+            #     active=False
+            # )
             
             # 9. CRV veto: |dt| < 150 ns (dt = coinc time - track t0) 
             dt_threshold = 150  
@@ -217,14 +215,17 @@ class Analyse:
                 mask=data["unvetoed"]
             )
 
-            self._log("All cuts defined successfully", level=1)
+            # Mark CE-like unvetoed tracks 
+            # Useful for debugging 
+            data["unvetoed_CE_like"] = cut_manager.combine_cuts()
+
+            self.logger.log("All cuts defined", "success")
             
         except Exception as e:
-            self._log(f"Error defining cuts: {e}", level=0)  # Always print errors
-            raise  # Re-raise the exception
+            self.logger.log(f"Error defining cuts: {e}", "error") 
+            return None  
         
     def apply_cuts(self, data, cut_manager): # mask): 
-        # FIXME! 
         """Apply all trk-level mask to the data
         
         Args:
@@ -234,38 +235,41 @@ class Analyse:
         Returns:
             ak.Array: Data after cuts applied
         """
-        self._log("Applying cuts to data", level=1)
+        self.logger.log("Applying cuts to data", "info")
         
         try:
             # Make an empty container for filtered data
             data_cut = {}             
             
             # Combine cuts
-            self._log("Combining cuts", level=2)
-            # CE_like = data["CE_like"] # .combine_cuts(active_only=True) # unvetoed is inactive
-            # unvetoed = cut_manager.combine_cuts(active_only=False) # unvetoed in inactive
+            self.logger.log(f"Combining cuts", "info") 
             trk_mask = cut_manager.combine_cuts(active_only=False)
-            # data_cut["combined"] = combined
             
-            # # Select tracks
-            self._log("Selecting tracks", level=2)
+            # Select tracks
+            self.logger.log("Selecting tracks", "max")
             data_cut["trk"] = data["trk"][trk_mask]
             data_cut["trkfit"] = data["trkfit"][trk_mask]
             data_cut["trkmc"] = data["trkmc"][trk_mask]
             
             # Then clean up events with no tracks after cuts
-            self._log("Cleaning up events with no tracks after cuts", level=2)
+            self.logger.log(f"Cleaning up events with no tracks after cuts", "max") 
             evt_mask = ak.any(trk_mask, axis=-1)
-            data_cut = data[evt_mask] 
+            # data_cut = data_cut[evt_mask] 
+
+            # Apply event mask to each array in the dictionary
+            for key in data_cut: 
+                # Is this really OK? 
+                data_cut[key] = data_cut[key][evt_mask]
+
             
-            self._log("Cuts applied successfully", level=1)
+            self.logger.log(f"Cuts applied successfully", "success")
             
             return data_cut
             
         except Exception as e:
-            self._log(f"Error applying cuts: {e}", level=0)  # Always print errors
-            raise
-
+            self.logger.log(f"Error applying cuts: {e}", "error") 
+            return None
+            
     def create_histograms(self, data, data_cut):
         """Create histograms from the data before and after applying cuts
         
@@ -276,30 +280,32 @@ class Analyse:
         Returns:
             dict: Dictionary of histograms
         """
-        self._log("Creating histograms", level=1)
+        self.logger.log("Creating histograms", "info")
         
         # Tools 
         selector = self.selector 
         vector = self.vector
+
+        hist_label_1 = "All tracks" 
+        hist_label_2 = "Unvetoed CE-like tracks" 
 
         try: 
 
             #### Create histogram objects:
             # Full momentum range histogram
             hist_full_range = hist.Hist(
-                hist.axis.Regular(1000, 0, 1000, name="momentum", label="Momentum [MeV/c]"),
-                hist.axis.StrCategory(["All tracks", "CE-like tracks"], name="selection", label="Selection")
+                hist.axis.Regular(500, 0, 500, name="momentum", label="Momentum [MeV/c]"),
+                hist.axis.StrCategory([hist_label_1, hist_label_2], name="selection", label="Selection")
             )
             # Signal region histogram (fine binning)
             hist_signal_region = hist.Hist(
                 hist.axis.Regular(13, 103.6, 104.9, name="momentum", label="Momentum [MeV/c]"),
-                hist.axis.StrCategory(["All tracks", "CE-like tracks"], name="selection", label="Selection")
+                hist.axis.StrCategory([hist_label_1, hist_label_2], name="selection", label="Selection")
             )
 
             # Process and fill histograms in batches
         
             # 1. First process "before cuts" data
-            self._log("Processing 'wide range' events", level=2)
             at_trkent_all = selector.select_surface(data["trkfit"], sid=0)
             mom_all = vector.get_mag(data["trkfit"]["trksegs"][at_trkent_all], "mom")
             
@@ -310,11 +316,11 @@ class Analyse:
                 mom_all = ak.flatten(mom_all, axis=None)
                 
             # Fill histogram for "all events"
-            hist_full_range.fill(momentum=mom_all, selection=np.full(len(mom_all), "All tracks"))
+            hist_full_range.fill(momentum=mom_all, selection=np.full(len(mom_all), hist_label_1))
             
             # Filter for signal region
             mom_all_sig = mom_all[(mom_all >= 103.6) & (mom_all <= 104.9)]
-            hist_signal_region.fill(momentum=mom_all_sig, selection=np.full(len(mom_all_sig), "All tracks"))
+            hist_signal_region.fill(momentum=mom_all_sig, selection=np.full(len(mom_all_sig), hist_label_1))
             
             # Clean up to free memory
             del mom_all, mom_all_sig, at_trkent_all
@@ -322,7 +328,6 @@ class Analyse:
             gc.collect()
 
             # 2. Now process "after cuts" data 
-            self._log("Processing 'signal region' events", level=2)
             at_trkent_cut = selector.select_surface(data_cut["trkfit"], sid=0)
             mom_cut = vector.get_mag(data_cut["trkfit"]["trksegs"][at_trkent_cut], "mom")
             
@@ -333,11 +338,11 @@ class Analyse:
                 mom_cut = ak.flatten(mom_cut, axis=None)
                 
             # Fill histogram for "CE-like events"
-            hist_full_range.fill(momentum=mom_cut, selection=np.full(len(mom_cut), "CE-like tracks"))
+            hist_full_range.fill(momentum=mom_cut, selection=np.full(len(mom_cut), hist_label_2))
             
             # Filter for signal region
             mom_cut_sig = mom_cut[(mom_cut >= 103.6) & (mom_cut <= 104.9)]
-            hist_signal_region.fill(momentum=mom_cut_sig, selection=np.full(len(mom_cut_sig), "CE-like tracks"))
+            hist_signal_region.fill(momentum=mom_cut_sig, selection=np.full(len(mom_cut_sig), hist_label_2))
             
             # Clean up to free memory
             del mom_cut, mom_cut_sig, at_trkent_cut
@@ -378,7 +383,7 @@ class Analyse:
             # hist_signal_region.fill(momentum=mom_all_sig, selection=np.full(len(mom_all_sig), "All events"))
             # hist_signal_region.fill(momentum=mom_cut_sig, selection=np.full(len(mom_cut_sig), "CE-like events"))
     
-            self._log("Histograms filled successfully", level=1)
+            self.logger.log("Histograms filled", "success")
 
             # Create a copy in results and explicitly delete large arrays after use
             result = {
@@ -393,7 +398,7 @@ class Analyse:
 
         except Exception as e:
             # Handle any errors that occur during processing
-            self._log(f"Error filling histograms: {e}", level=0)  # Always print errors
+            self.logger.log(f"Error filling histograms: {e}", "error")
             return None
         
     def execute(self, data, file_id):
@@ -406,33 +411,31 @@ class Analyse:
         Returns:
             dict: Complete analysis results
         """
-        self._log(f"Beginning analysis execution for file: {file_id}", level=1)
+
+        self.logger.log(f"Beginning analysis execution for file: {file_id}", "info") 
         
         try:
             # Create a unique cut manager for this file
             cut_manager = CutManager(verbosity=self.verbosity)
             
             # Define cuts
-            self._log("Defining cuts", level=1)
+            self.logger.log("Defining cuts", "max")
             self.define_cuts(data, cut_manager)
 
             # Calculate cut stats
-            self._log("Getting cut stats", level=1)
+            self.logger.log("Getting cut stats", "max")
             cut_stats = cut_manager.calculate_cut_stats(data, progressive=True)
 
-            # Retrieve masks
-            CE_like = data["CE_like"] # copy 
-
             # Apply CE-like cuts
-            self._log("Applying cuts", level=1)
+            self.logger.log("Applying cuts", "max")
             data_cut = self.apply_cuts(data, cut_manager)
             
             # Create histograms
-            self._log("Creating histograms", level=1)
+            self.logger.log("Creating histograms", "max")
             histograms = self.create_histograms(data, data_cut)
             
             # Compile all results
-            self._log("Analysis completed successfully", level=1)
+            self.logger.log("Analysis completed", "success")
 
             result = {
                 "file_id": file_id,
@@ -447,9 +450,8 @@ class Analyse:
             return result
             
         except Exception as e:
-            self._log(f"Error during analysis execution: {e}", level=0)  # Always print errors
-            raise
-
+            self.logger.log(f"Error during analysis execution: {e}", "error")  
+            return None
 
     # # This could be quite nice, but it needs the full analysis config including everything which could be a bit complex. 
     # # Need to think about this. 
@@ -511,4 +513,4 @@ class Analyse:
             
     #     except Exception as e:
     #         self._log(f"Error loading configuration: {e}", level=0)
-            raise
+            # raise
