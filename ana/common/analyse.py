@@ -10,6 +10,8 @@ from pyutils.pyvector import Vector
 from pyutils.pylogger import Logger
 from cut_manager import CutManager
 
+# FIXME: doing a lot of copy operations is not very efficient, but I am not sure if there is an alternative
+
 class Analyse:
     """Class to handle analysis functions
     """
@@ -59,6 +61,16 @@ class Analyse:
             trk_mid = selector.select_surface(data["trkfit"], sid=1)
             trk_back = selector.select_surface(data["trkfit"], sid=2)
             in_trk = (trk_front | trk_mid | trk_back)
+
+            # 0. Track segments at tracker entrance
+            # cut_manager.add_cut(
+            #     name="at_trk_ent", 
+            #     description="Track segments at tracker entrance", 
+            #     mask=trk_front
+            # )
+
+            # Useful for debugging
+            data["at_trk_front"] = trk_front
             
             # 1. Truth track parent is electron 
             is_electron = data["trkmc"]["trkmcsim"]["pdg"] == 11
@@ -184,6 +196,7 @@ class Analyse:
             max_coinc_time = ak.max(data["crv"]["crvcoincs.time"], axis=-1)
         
             # Broadcast coincidence times to match track times structure
+            # we only care about the difference from t0, but this is more general
             
             # Create arrays with the right structure
             coinc_info = ak.zip({
@@ -212,7 +225,8 @@ class Analyse:
             cut_manager.add_cut(
                 name="unvetoed",
                 description="No veto: |dt| >= 150 ns",
-                mask=data["unvetoed"]
+                mask=data["unvetoed"],
+                active=False
             )
 
             # Mark CE-like unvetoed tracks 
@@ -225,7 +239,10 @@ class Analyse:
             self.logger.log(f"Error defining cuts: {e}", "error") 
             return None  
         
-    def apply_cuts(self, data, cut_manager): # mask): 
+    def apply_cuts(self, data, cut_manager, active_only=True): # mask): 
+
+        ## data_cut needs to be an awkward array 
+    
         """Apply all trk-level mask to the data
         
         Args:
@@ -238,29 +255,28 @@ class Analyse:
         self.logger.log("Applying cuts to data", "info")
         
         try:
-            # Make an empty container for filtered data
-            data_cut = {}             
+            # Copy the array 
+            # This is memory intensive but the easiest solution for what I'm trying to do
+            data_cut = ak.copy(data) 
             
             # Combine cuts
             self.logger.log(f"Combining cuts", "info") 
-            trk_mask = cut_manager.combine_cuts(active_only=False)
+            trk_mask = cut_manager.combine_cuts(active_only=active_only)
+
+            # OPTIONAL: select track segments at tracker entrance
+            # This makes it easier to study background events in the end
+            data_cut["trkfit"] = data_cut["trkfit"][data_cut["at_trk_front"]]
             
             # Select tracks
             self.logger.log("Selecting tracks", "max")
-            data_cut["trk"] = data["trk"][trk_mask]
-            data_cut["trkfit"] = data["trkfit"][trk_mask]
-            data_cut["trkmc"] = data["trkmc"][trk_mask]
+            data_cut["trk"] = data_cut["trk"][trk_mask]
+            data_cut["trkfit"] = data_cut["trkfit"][trk_mask]
+            data_cut["trkmc"] = data_cut["trkmc"][trk_mask]
             
             # Then clean up events with no tracks after cuts
             self.logger.log(f"Cleaning up events with no tracks after cuts", "max") 
             evt_mask = ak.any(trk_mask, axis=-1)
-            # data_cut = data_cut[evt_mask] 
-
-            # Apply event mask to each array in the dictionary
-            for key in data_cut: 
-                # Is this really OK? 
-                data_cut[key] = data_cut[key][evt_mask]
-
+            data_cut = data_cut[evt_mask] 
             
             self.logger.log(f"Cuts applied successfully", "success")
             
@@ -270,7 +286,8 @@ class Analyse:
             self.logger.log(f"Error applying cuts: {e}", "error") 
             return None
             
-    def create_histograms(self, data, data_cut):
+    def create_histograms(self, data, data_CE, data_CE_unvetoed):
+        
         """Create histograms from the data before and after applying cuts
         
         Args:
@@ -286,102 +303,49 @@ class Analyse:
         selector = self.selector 
         vector = self.vector
 
-        hist_label_1 = "All tracks" 
-        hist_label_2 = "Unvetoed CE-like tracks" 
+        hist_labels = ["All tracks", "CE-like tracks", "Unvetoed CE-like tracks"]
 
         try: 
 
             #### Create histogram objects:
             # Full momentum range histogram
             hist_full_range = hist.Hist(
-                hist.axis.Regular(500, 0, 500, name="momentum", label="Momentum [MeV/c]"),
-                hist.axis.StrCategory([hist_label_1, hist_label_2], name="selection", label="Selection")
+                hist.axis.Regular(30, 0, 300, name="momentum", label="Momentum [MeV/c]"),
+                hist.axis.StrCategory(hist_labels, name="selection", label="Selection")
             )
             # Signal region histogram (fine binning)
             hist_signal_region = hist.Hist(
                 hist.axis.Regular(13, 103.6, 104.9, name="momentum", label="Momentum [MeV/c]"),
-                hist.axis.StrCategory([hist_label_1, hist_label_2], name="selection", label="Selection")
+                hist.axis.StrCategory(hist_labels, name="selection", label="Selection")
             )
 
             # Process and fill histograms in batches
+            def _fill_hist(trksegs, label): 
+                """ Nested helper function to fill hists """
+                mom = vector.get_mag(trksegs, "mom")
+                # Flatten 
+                if mom is None:
+                    mom = ak.Array([])
+                else:
+                    mom = ak.flatten(mom, axis=None)
+                    
+                # Fill histogram for "all events"
+                hist_full_range.fill(momentum=mom, selection=np.full(len(mom), label))
+
+                # Filter for signal region
+                mom_sig = mom[(mom >= 103.6) & (mom <= 104.9)]
+                hist_signal_region.fill(momentum=mom_sig, selection=np.full(len(mom_sig), label))
+            
+                # Clean up 
+                del mom, mom_sig 
+                import gc
+                gc.collect()
+                    
         
-            # 1. First process "before cuts" data
-            at_trkent_all = selector.select_surface(data["trkfit"], sid=0)
-            mom_all = vector.get_mag(data["trkfit"]["trksegs"][at_trkent_all], "mom")
-            
-            # Flatten 
-            if mom_all is None:
-                mom_all = ak.Array([])
-            else:
-                mom_all = ak.flatten(mom_all, axis=None)
-                
-            # Fill histogram for "all events"
-            hist_full_range.fill(momentum=mom_all, selection=np.full(len(mom_all), hist_label_1))
-            
-            # Filter for signal region
-            mom_all_sig = mom_all[(mom_all >= 103.6) & (mom_all <= 104.9)]
-            hist_signal_region.fill(momentum=mom_all_sig, selection=np.full(len(mom_all_sig), hist_label_1))
-            
-            # Clean up to free memory
-            del mom_all, mom_all_sig, at_trkent_all
-            import gc
-            gc.collect()
-
-            # 2. Now process "after cuts" data 
-            at_trkent_cut = selector.select_surface(data_cut["trkfit"], sid=0)
-            mom_cut = vector.get_mag(data_cut["trkfit"]["trksegs"][at_trkent_cut], "mom")
-            
-            # Convert to empty array if needed
-            if mom_cut is None:
-                mom_cut = ak.Array([])
-            else:
-                mom_cut = ak.flatten(mom_cut, axis=None)
-                
-            # Fill histogram for "CE-like events"
-            hist_full_range.fill(momentum=mom_cut, selection=np.full(len(mom_cut), hist_label_2))
-            
-            # Filter for signal region
-            mom_cut_sig = mom_cut[(mom_cut >= 103.6) & (mom_cut <= 104.9)]
-            hist_signal_region.fill(momentum=mom_cut_sig, selection=np.full(len(mom_cut_sig), hist_label_2))
-            
-            # Clean up to free memory
-            del mom_cut, mom_cut_sig, at_trkent_cut
-            gc.collect()
-        
-            # # Data
-            # self._log("Selecting tracker entrance surfaces", level=2)
-            # at_trkent_all = selector.select_surface(data["trkfit"], sid=0)
-            # at_trkent_cut = selector.select_surface(data_cut["trkfit"], sid=0)
-            
-            # self._log("Calculating momentum magnitudes", level=2)
-            # mom_all = vector.get_mag(data["trkfit"]["trksegs"][at_trkent_all], "mom")
-            # mom_cut = vector.get_mag(data_cut["trkfit"]["trksegs"][at_trkent_cut], "mom")
-
-            # # Flatten, but check None and convert to empty array if needed
-            # mom_all = ak.flatten(mom_all, axis=None) if mom_all is not None else ak.Array([])
-            # mom_cut = ak.flatten(mom_cut, axis=None) if mom_cut is not None else ak.Array([])
-
-            # # Define histograms 
-            # self._log("Creating histogram objects", level=2)
-    
-
-            # ##### Fill the histograms #####
-            # self._log("Filling histograms", level=2)
-    
-            # # Full range histogram
-            # hist_full_range.fill(momentum=mom_all, selection=np.full(len(mom_all), "All events"))
-            # hist_full_range.fill(momentum=mom_cut, selection=np.full(len(mom_cut), "CE-like events"))
-            
-            # # Signal region histogram
-            # # For signal region, we need to filter the momenta to be within the range
-            # mom_all_sig = mom_all[(mom_all >= 103.6) & (mom_all <= 104.9)]
-            # mom_cut_sig = mom_cut[(mom_cut >= 103.6) & (mom_cut <= 104.9)]
-            
-            # if self.verbosity >= 2:
-            #     self._log(f"Signal region events: all={len(mom_all_sig)}, cut={len(mom_cut_sig)}", level=2)
-            
-            # hist_signal_region.fill(momentum=mom_all_sig, selection=np.full(len(mom_all_sig), "All events"))
-            # hist_signal_region.fill(momentum=mom_cut_sig, selection=np.full(len(mom_cut_sig), "CE-like events"))
+            # 1. First process "all tracks" data
+            _fill_hist(data["trkfit"]["trksegs"][data["at_trk_front"]], "All tracks") # This one needs the trk entrance cut
+            _fill_hist(data_CE["trkfit"]["trksegs"], "CE-like tracks")
+            _fill_hist(data_CE_unvetoed["trkfit"]["trksegs"], "Unvetoed CE-like tracks")
     
             self.logger.log("Histograms filled", "success")
 
@@ -390,9 +354,6 @@ class Analyse:
                 "Wide range": hist_full_range.copy(), 
                 "Signal region": hist_signal_region.copy()
             }
-        
-            # Force cleanup of large references
-            # del mom_all, mom_cut, mom_all_sig, mom_cut_sig
 
             return result 
 
@@ -428,11 +389,13 @@ class Analyse:
 
             # Apply CE-like cuts
             self.logger.log("Applying cuts", "max")
-            data_cut = self.apply_cuts(data, cut_manager)
+            # Not very efficient to do it this way...
+            data_CE = self.apply_cuts(data, cut_manager, active_only=True) # Just CE-like tracks 
+            data_CE_unvetoed = self.apply_cuts(data, cut_manager, active_only=False) # Unvetoed CE-like tracks
             
-            # Create histograms
+            # # Create histograms
             self.logger.log("Creating histograms", "max")
-            histograms = self.create_histograms(data, data_cut)
+            histograms = self.create_histograms(data, data_CE, data_CE_unvetoed)
             
             # Compile all results
             self.logger.log("Analysis completed", "success")
@@ -440,8 +403,8 @@ class Analyse:
             result = {
                 "file_id": file_id,
                 "cut_stats": cut_stats,
-                "filtered_data": data_cut,
-                "histograms": histograms,
+                "filtered_data": data_CE_unvetoed, # ,
+                "histograms": histograms
             }
 
             # Force garbage collection
