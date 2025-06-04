@@ -214,7 +214,7 @@ class Analyse:
             
             # Check if dt if within threshold
             veto = (
-                (abs(matched["coinc", "min_time"] - matched["track", "max_time"]) < dt_threshold) & 
+                (abs(matched["coinc", "min_time"] - matched["track", "max_time"]) < dt_threshold) |
                 (abs(matched["track", "min_time"] - matched["coinc", "max_time"]) < dt_threshold)
             )
 
