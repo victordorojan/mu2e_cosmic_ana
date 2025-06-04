@@ -176,63 +176,44 @@ class Analyse:
             # Mark CE-like tracks 
             # Useful for debugging 
             data["CE_like"] = cut_manager.combine_cuts()
-            
-            # cut_manager.add_cut(
-            #     name="CE_like",
-            #     description="CE-like tracks",
-            #     mask=data["CE_like"],
-            #     active=False
-            # )
-            
-            # 9. CRV veto: |dt| < 150 ns (dt = coinc time - track t0) 
-            dt_threshold = 150  
-        
-            # Get min and max track t0 times for each track
-            min_trk_time = ak.min(data["trkfit"]["trksegs"]["time"][trk_front], axis=-1)
-            max_trk_time = ak.max(data["trkfit"]["trksegs"]["time"][trk_front], axis=-1)
-        
-            # Get min and max coincidence times for each event
-            min_coinc_time = ak.min(data["crv"]["crvcoincs.time"], axis=-1)
-            max_coinc_time = ak.max(data["crv"]["crvcoincs.time"], axis=-1)
-        
-            # Broadcast coincidence times to match track times structure
-            # we only care about the difference from t0, but this is more general
-            
-            # Create arrays with the right structure
-            coinc_info = ak.zip({
-                "min_time": min_coinc_time,
-                "max_time": max_coinc_time
-            })
-            
-            trk_info = ak.zip({
-                "min_time": min_trk_time,
-                "max_time": max_trk_time
-            })
-            
-            # Use cartesian product to align each coinc with each track
-            matched = ak.cartesian({"coinc": coinc_info, "track": trk_info})
-            
-            # Check if dt if within threshold
-            veto = (
-                (abs(matched["coinc", "min_time"] - matched["track", "max_time"]) < dt_threshold) |
-                (abs(matched["track", "min_time"] - matched["coinc", "max_time"]) < dt_threshold)
-            )
 
-            # Mark unvetoed tracks
-            # Useful for debugging 
-            data["unvetoed"] = ~veto # Is the copy needed? 
+            # 9. CRV veto: |dt| < 150 ns (dt = coinc time - track t0) 
+            # Check if EACH track is within 150 ns of ANY coincidence 
+            # This is hard with arrays and should be reviewed!
             
+            dt_threshold = 150
+            
+            # Get track and coincidence times
+            trk_times = data["trkfit"]["trksegs"]["time"][trk_front]  # events × tracks × segments
+            coinc_times = data["crv"]["crvcoincs.time"]              # events × coincidences
+            
+            # Broadcast CRV times to match track structure, so that we can compare element-wis
+            coinc_broadcast = coinc_times[:, None, None, :]  # Add dimensions for tracks and segments
+            trk_broadcast = trk_times[:, :, :, None]         # Add dimension for coincidences
+            
+            # Calculate time differences
+            dt = abs(trk_broadcast - coinc_broadcast)
+            
+            # Check if within threshold
+            within_threshold = dt < dt_threshold
+            
+            # Reduce one axis at a time 
+            # First reduce over coincidences (axis=3)
+            any_coinc = ak.any(within_threshold, axis=3)
+            
+            # Then reduce over segments (axis=2) 
+            veto = ak.any(any_coinc, axis=2)
+
+            data["unvetoed"] = ~veto
+
             cut_manager.add_cut(
                 name="unvetoed",
                 description="No veto: |dt| >= 150 ns",
-                mask=data["unvetoed"],
-                active=False
+                mask=~veto
             )
 
-            # Mark CE-like unvetoed tracks 
-            # Useful for debugging 
             data["unvetoed_CE_like"] = cut_manager.combine_cuts()
-
+            
             self.logger.log("All cuts defined", "success")
             
         except Exception as e:
@@ -393,7 +374,7 @@ class Analyse:
             data_CE = self.apply_cuts(data, cut_manager, active_only=True) # Just CE-like tracks 
             data_CE_unvetoed = self.apply_cuts(data, cut_manager, active_only=False) # Unvetoed CE-like tracks
             
-            # # Create histograms
+            # Create histograms
             self.logger.log("Creating histograms", "max")
             histograms = self.create_histograms(data, data_CE, data_CE_unvetoed)
             
@@ -403,7 +384,7 @@ class Analyse:
             result = {
                 "file_id": file_id,
                 "cut_stats": cut_stats,
-                "filtered_data": data_CE_unvetoed, # ,
+                "filtered_data": data_CE_unvetoed, # _unvetoed # data_CE_unvetoed # , # ,
                 "histograms": histograms
             }
 

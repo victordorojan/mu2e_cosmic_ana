@@ -107,7 +107,7 @@ class CutManager:
                 combined = combined & cut_info["mask"] 
         
         return combined
-    
+        
     def calculate_cut_stats(self, data, progressive=True, active_only=False):
         """ Utility to calculate stats for each cut.
         
@@ -135,10 +135,12 @@ class CutManager:
         cuts = [name for name in self.cuts.keys()] 
         if active_only: 
             cuts = [name for name in self.cuts.keys() if self.cuts[name]["active"]]
-        
+
+        current_mask = None
         previous_mask = None
         
         for name in cuts:
+            
             cut_info = self.cuts[name]
             mask = cut_info["mask"]
             
@@ -195,15 +197,14 @@ class CutManager:
         # Print header
         self.logger.log(f"Cut statistics", "info")
         print("-" * 110)
-        header = "{:<20} {:<10} {:<20} {:<20} {:<20} {:<30}".format(
-            "Cut", "Active", "Events Passing", "Absolute Frac. [%]", "Relative Frac. [%]", "Description")
+        header = "{:<20} {:<20} {:<20} {:<20} {:<30}".format(
+            "Cut", "Events passing", "Absolute frac. [%]", "Relative frac. [%]", "Description")
         print(header)
         print("-" * 110)
         # Print each cut's statistics
         for stat in stats:
-            row = "{:<20} {:<10} {:<20} {:<20.2f} {:<20.2f} {:<30}".format(
-                stat["name"], 
-                stat["active"],
+            row = "{:<20} {:<20} {:<20.2f} {:<20.2f} {:<30}".format(
+                stat["name"],
                 stat["events_passing"], 
                 stat["absolute_frac"], 
                 stat["relative_frac"], 
