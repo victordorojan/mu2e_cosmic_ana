@@ -190,6 +190,9 @@ class Analyse:
             # Broadcast CRV times to match track structure, so that we can compare element-wis
             coinc_broadcast = coinc_times[:, None, None, :]  # Add dimensions for tracks and segments
             trk_broadcast = trk_times[:, :, :, None]         # Add dimension for coincidences
+
+            # coinc_broadcast shape is [E, 1, 1, C] 
+            # trk_broadcast shape is [E, T, S, 1]
             
             # Calculate time differences
             dt = abs(trk_broadcast - coinc_broadcast)
