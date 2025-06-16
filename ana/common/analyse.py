@@ -15,10 +15,12 @@ from cut_manager import CutManager
 class Analyse:
     """Class to handle analysis functions
     """
-    def __init__(self, verbosity=1):
+    def __init__(self, on_spill=False, event_subrun=None, verbosity=1):
         """Initialise the analysis handler
         
         Args:
+            on_spill (bool, optional): Include on-spill cuts
+            event_subrun (tuple of ints, optional): Select a specific event and subrun
             verbosity (int, optional): Level of output detail (0: critical errors only, 1: info, 2: debug, 3: deep debug)
         """
 
@@ -36,7 +38,8 @@ class Analyse:
         self.vector = Vector(verbosity=self.verbosity) 
         
         # Analysis configuration
-        self.on_spill = False  # Default to off-spill 
+        self.on_spill = on_spill  # Default to off-spill 
+        self.event_subrun = event_subrun # event selection (for debugging)
         self.logger.log(f"Initialised with on_spill={self.on_spill}", "info")
     
     def define_cuts(self, data, cut_manager, on_spill=None):
@@ -193,11 +196,13 @@ class Analyse:
             if on_spill:
                 # 4. Time at tracker entrance (trk level)
                 self.logger.log("Defining time cut (on-spill specific)", "info")
+
+                # trksegs level
                 within_t0 = ((640 < data["trkfit"]["trksegs"]["time"]) & 
                              (data["trkfit"]["trksegs"]["time"] < 1650))
             
                 # trk-level definition (the actual cut)
-                within_t0 = ak.all(~trk_front | within_t0, axis=-1)
+                within_t0 = ak.all(~at_trk_front | within_t0, axis=-1)
                 cut_manager.add_cut( 
                     name="within_t0",
                     description="t0 at tracker entrance (640 < t_0 < 1650 ns)",
@@ -247,7 +252,6 @@ class Analyse:
 
             # 9. CRV veto: |dt| < 150 ns (dt = coinc time - track t0) 
             # Check if EACH track is within 150 ns of ANY coincidence 
-            # This is hard with arrays and should be reviewed!
             
             dt_threshold = 150
             
@@ -268,12 +272,16 @@ class Analyse:
             
             # Check if within threshold
             within_threshold = dt < dt_threshold
+
+            # For plotting: find the coincidences within threshold 
+            # coinc_veto = ak.any(within_threshold, axis=(1, 2))  # [E, C]
+            # data["coinc_veto"] = coinc_veto
             
             # Reduce one axis at a time 
             # First reduce over coincidences (axis=3)
             any_coinc = ak.any(within_threshold, axis=3)
             
-            # Then reduce over segments (axis=2) 
+            # Then reduce over trks (axis=2) 
             veto = ak.any(any_coinc, axis=2)
 
             data["unvetoed"] = ~veto
@@ -282,7 +290,7 @@ class Analyse:
                 name="unvetoed",
                 description="No veto: |dt| >= 150 ns",
                 mask=~veto,
-                active=False # A bit sloppy
+                active=False # FIXME
             )
 
             data["unvetoed_CE_like"] = cut_manager.combine_cuts()
@@ -366,15 +374,22 @@ class Analyse:
 
             #### Create histogram objects:
             # Full momentum range histogram
-            hist_full_range = hist.Hist(
+            h1_mom_full_range = hist.Hist(
                 hist.axis.Regular(30, 0, 300, name="momentum", label="Momentum [MeV/c]"),
                 hist.axis.StrCategory(hist_labels, name="selection", label="Selection")
             )
             # Signal region histogram (fine binning)
-            hist_signal_region = hist.Hist(
+            h1_mom_signal_region = hist.Hist(
                 hist.axis.Regular(13, 103.6, 104.9, name="momentum", label="Momentum [MeV/c]"),
                 hist.axis.StrCategory(hist_labels, name="selection", label="Selection")
             )
+
+            # Z-position histograms
+            h1_crv_z = hist.Hist(
+                hist.axis.Regular(100, -15e3, 10e3, name="crv_z", label="CRV z-position [mm]"),
+                hist.axis.StrCategory(hist_labels, name="selection", label="Selection")
+            )
+
 
             # Process and fill histograms in batches
             def _fill_hist(data, label): 
@@ -382,6 +397,7 @@ class Analyse:
 
                 at_trk_front = selector.select_surface(data["trkfit"], sid=0)              
                 mom = vector.get_mag(data["trkfit"]["trksegs"][at_trk_front], "mom")
+                crv_z = ak.flatten(data["crv"]["crvcoincs.pos.fCoordinates.fZ"], axis=None)
                 
                 # Flatten 
                 if mom is None:
@@ -389,15 +405,18 @@ class Analyse:
                 else:
                     mom = ak.flatten(mom, axis=None)
                     
-                # Fill histogram for "all events"
-                hist_full_range.fill(momentum=mom, selection=np.full(len(mom), label))
+                # Fill h1ogram for wide range
+                h1_mom_full_range.fill(momentum=mom, selection=np.full(len(mom), label))
 
-                # Filter for signal region
+                # Fill signal region
                 mom_sig = mom[(mom >= 103.6) & (mom <= 104.9)]
-                hist_signal_region.fill(momentum=mom_sig, selection=np.full(len(mom_sig), label))
-            
+                h1_mom_signal_region.fill(momentum=mom_sig, selection=np.full(len(mom_sig), label))
+
+                # Fill position
+                h1_crv_z.fill(crv_z=crv_z, selection=np.full(len(crv_z), label))
+                
                 # Clean up 
-                del mom, mom_sig 
+                del mom, mom_sig, crv_z
                 import gc
                 gc.collect()
                     
@@ -411,8 +430,9 @@ class Analyse:
 
             # Create a copy in results and explicitly delete large arrays after use
             result = {
-                "Wide range": hist_full_range.copy(), 
-                "Signal region": hist_signal_region.copy()
+                "Wide range": h1_mom_full_range.copy(), 
+                "Signal region": h1_mom_signal_region.copy(),
+                "CRV z-position": h1_crv_z.copy()
             }
 
             return result 
@@ -436,9 +456,15 @@ class Analyse:
         self.logger.log(f"Beginning analysis execution for file: {file_id}", "info") 
         
         try:
+
             # Create a unique cut manager for this file
             cut_manager = CutManager(verbosity=self.verbosity)
-            
+
+            # Optional prefiltering 
+            if self.event_subrun is not None: 
+                mask = ((data["evt"]["event"] == self.event_subrun[0]) & (data["evt"]["subrun"] == self.event_subrun[1]))
+                data = data[mask]
+
             # Define cuts
             self.logger.log("Defining cuts", "max")
             self.define_cuts(data, cut_manager)
