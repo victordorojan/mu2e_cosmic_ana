@@ -245,11 +245,6 @@ class Analyse:
                 mask=within_pitch_angle
             )
 
-
-            # Mark CE-like tracks 
-            # Useful for debugging 
-            data["CE_like"] = cut_manager.combine_cuts()
-
             # 9. CRV veto: |dt| < 150 ns (dt = coinc time - track t0) 
             # Check if EACH track is within 150 ns of ANY coincidence 
             
@@ -289,11 +284,8 @@ class Analyse:
             cut_manager.add_cut(
                 name="unvetoed",
                 description="No veto: |dt| >= 150 ns",
-                mask=~veto,
-                active=False # FIXME
+                mask=~veto
             )
-
-            data["unvetoed_CE_like"] = cut_manager.combine_cuts()
             
             self.logger.log("All cuts defined", "success")
             
@@ -301,7 +293,7 @@ class Analyse:
             self.logger.log(f"Error defining cuts: {e}", "error") 
             return None  
         
-    def apply_cuts(self, data, cut_manager, group=None, active_only=True): # mask): 
+    def apply_cuts(self, data, cut_manager, group=None, active_only=True):
 
         ## data_cut needs to be an awkward array 
     
@@ -442,12 +434,14 @@ class Analyse:
             self.logger.log(f"Error filling histograms: {e}", "error")
             return None
         
-    def execute(self, data, file_id):
+    def execute(self, data, file_id, inactive_cuts=None):
         """Perform complete analysis on an array
         
         Args:
             data: The data to analyse
             file_id: Identifier for the file
+            cut_names: List of cuts to activate/deactivate
+            active: activate/deactive cuts
             
         Returns:
             dict: Complete analysis results
@@ -469,15 +463,32 @@ class Analyse:
             self.logger.log("Defining cuts", "max")
             self.define_cuts(data, cut_manager)
 
+            # Set activate cuts
+            if inactive_cuts: 
+                cut_manager.toggle_cut(inactive_cuts, active=False)
+            
             # Calculate cut stats
             self.logger.log("Getting cut stats", "max")
-            cut_stats = cut_manager.calculate_cut_stats(data, progressive=True)
+            cut_stats = cut_manager.calculate_cut_stats(data, progressive=True, active_only=True)
 
             # Apply CE-like cuts
             self.logger.log("Applying cuts", "max")
-            # A bit sloppy to do it this way 
-            data_CE = self.apply_cuts(data, cut_manager, active_only=True) # Just CE-like tracks 
-            data_CE_unvetoed = self.apply_cuts(data, cut_manager, active_only=False) # Unvetoed CE-like tracks
+
+            # Turn off veto 
+            cut_manager.toggle_cut("unvetoed", active=False)
+            # Mark CE-like tracks (useful for debugging 
+            data["CE_like"] = cut_manager.combine_cuts(active_only=True)
+            # Apply cuts
+            data_CE = self.apply_cuts(data, cut_manager) # Just CE-like tracks 
+            
+            # Turn on veto 
+            data_CE_unvetoed = None
+            cut_manager.toggle_cut("unvetoed", active=True)
+            # Mark CE-like tracks (useful for debugging 
+            data["unvetoed_CE_like"] = cut_manager.combine_cuts(active_only=True)
+            # Apply cuts
+            data_CE_unvetoed = self.apply_cuts(data, cut_manager) 
+        
             
             # Create histograms
             self.logger.log("Creating histograms", "max")
