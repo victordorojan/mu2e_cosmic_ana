@@ -1,13 +1,16 @@
 import uproot
 import awkward as ak
+import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 import hist
 import gc
+import sys 
 
 from pyutils.pyselect import Select
 from pyutils.pyvector import Vector
 from pyutils.pylogger import Logger
+from pyutils.pyprint import Print
 from cut_manager import CutManager
 
 # FIXME: doing a lot of copy operations is not very efficient, but I am not sure if there is an alternative
@@ -387,6 +390,9 @@ class Analyse:
             def _fill_hist(data, label): 
                 """ Nested helper function to fill hists """
 
+                # Tracks must be electron candidates at the tracker entrance
+                is_electron = selector.is_electron(data["trk"])  
+                data["trkfit"] = data["trkfit"][is_electron]
                 at_trk_front = selector.select_surface(data["trkfit"], sid=0)              
                 mom = vector.get_mag(data["trkfit"]["trksegs"][at_trk_front], "mom")
                 crv_z = ak.flatten(data["crv"]["crvcoincs.pos.fCoordinates.fZ"], axis=None)
@@ -513,6 +519,314 @@ class Analyse:
             self.logger.log(f"Error during analysis execution: {e}", "error")  
             return None
 
+class Utils():
+    """
+    Utils class for misc helper methods 
+
+    These do not fit into the main analysis process
+    """
+    def __init__(self, verbosity=1):
+        """Initialise
+        """
+        # Verbosity 
+        self.verbosity = verbosity
+        # Start logger
+        self.logger = Logger(
+            print_prefix="[PostProcess]",
+            verbosity=self.verbosity
+        )
+        # Selector 
+        self.selector = Select(verbosity=0)
+        # Printer
+        self.printer = Print(verbose=True)
+        # Confirm
+        self.logger.log(f"Initialised", "info")
+
+    def get_background_events(self, results, printout=True, out_path=None): 
+        """
+        Write background event info
+
+        Args: 
+            results (list): list of results 
+            out_path: File path for txt output 
+        """
+        output = []
+        count = 0
+        
+        for i, result in enumerate(results): 
+            
+            data = ak.Array(result["filtered_data"])
+            
+            if len(data) == 0:
+                continue
+
+            # Get tracker entrance times
+            trk_front = self.selector.select_surface(data["trkfit"], sid=0)
+            track_time = data["trkfit"]["trksegs"]["time"][trk_front]
+            # Get coinc entrance times
+            coinc_time = data["crv"]["crvcoincs.time"]
+            
+            # Extract values
+            track_time_str = "" 
+            coinc_time_str = ""
+            
+            # Extract floats from track_time (nested structure: [[[values]], [[values]]])
+            track_floats = []
+            for nested in track_time:
+                for sublist in nested:
+                    for val in sublist:
+                        track_floats.append(float(val))
+            
+            # Extract floats from coinc_time (structure: [[], []])
+            coinc_floats = []
+            for sublist in coinc_time:
+                for val in sublist:
+                    coinc_floats.append(float(val))
+            
+            # Format as strings with precision
+            if track_floats:
+                track_time_str = ", ".join([f"{val:.6f}" for val in track_floats])
+            
+            if coinc_floats:
+                coinc_time_str = ", ".join([f"{val:.6f}" for val in coinc_floats])
+        
+            # Calculate dt
+            dt_str = ""
+            if track_floats and coinc_floats:
+                # Calculate dt between first track time and first coinc time
+                dt_value = abs(track_floats[0] - coinc_floats[0])
+                dt_str = f"{dt_value:.6f}"
+            
+            output.append(f"  Index:            {i}")
+            output.append(f"  Subrun:           {data["evt"]["subrun"]}")
+            output.append(f"  Event:            {data["evt"]["event"]}")
+            output.append(f"  File:             {result["file_id"]}")
+            output.append(f"  Track time [ns]:  {track_time_str}") 
+            output.append(f"  Coinc time [ns]:  {coinc_time_str if len(coinc_time_str)>0 else None}") 
+            output.append(f"  dt [ns]:          {dt_str if len(dt_str)>0 else "N/A"}")
+            output.append("-" * 40)
+
+            count += 1
+        
+        output = "\n".join(output)
+        
+        # Print 
+        if printout:
+            self.logger.log(f"Info for {count} background events :", "info")
+            print(output)
+        
+        # Write to file
+        if out_path:
+            with open(out_path, "w") as f:
+                f.write(output)
+        
+            self.logger.log(f"Wrote {out_path}", "success")
+
+    def get_verbose_background_events(self, data, out_path):
+
+        # Redirect stdout to file
+        with open(out_path, "w") as f:
+            old_stdout = sys.stdout
+            sys.stdout = f
+            self.printer.print_n_events(data, n_events=len(data))
+            # Restore stdout
+            sys.stdout = old_stdout
+            self.logger.log(f"Wrote {out_path}", "success")
+    
+
+    def get_kN(self, df_stats, numerator_name=None, denominator_name=None):
+        """
+        Retrieve efficiency data from DataFrame
+        
+        Args:
+            df_stats (pandas.DataFrame): DataFrame with cut statistics
+            numerator_name: The row to use as numerator.
+            denominator_name: The row to use as denominator_name.
+            
+        Returns:
+            tuple: k, N
+        """
+    
+        if numerator_name is None or denominator_name is None:
+            logger.log("Please provide a numerator_name and a denominator_name", "error")
+            return None
+    
+        # Get numerator
+        numerator_row = df_stats[df_stats["Cut"] == numerator_name]
+        k = numerator_row["Events Passing"].iloc[0]
+    
+        # Get denominator
+        denominator_row = df_stats[df_stats["Cut"] == denominator_name]
+        N = denominator_row["Events Passing"].iloc[0]
+    
+        # Hard to do this and handle all edge cases
+        # # Get numerator
+        # k = None
+        # if numerator_name: # Use specified numerator
+        # numerator_row = df_stats[df_stats["Cut"] == numerator_name]
+        # k = numerator_row["Events Passing"].iloc[0]
+        # else: 
+        #     if not signal: # Use last row
+        #         last_row = df_stats.iloc[-1]
+        #         k = last_row["Events Passing"]
+        #     else: # Use penultimate row
+        #         penultimate_row = df_stats.iloc[-2]
+        #         k = penultimate_row["Events Passing"]
+                
+        # # Get denominator
+        # N = None
+        # if denominator_name:  # Use specified denominator
+        #     denominator_row = df_stats[df_stats["Cut"] == denominator_name]
+        #     N = denominator_row["Events Passing"].iloc[0]
+        # else: 
+        #     if not signal: # Use penultimate row
+        #         penultimate_row = df_stats.iloc[-2]
+        #         N = penultimate_row["Events Passing"]
+        #     else: # Use first row
+        #         first_row = df_stats.iloc[0]
+        #         N = first_row["Events Passing"]
+        
+        return k, N
+    
+    def get_eff(self, df_stats, ce_row_name="within_pitch_angle", veto=True):
+        
+        """
+        Report efficiency results
+        """
+
+        self.logger.log(f"Getting efficiency with ce_row_name = {ce_row_name} and veto = {veto}", "info")
+    
+        # 
+        results = []
+        
+        k_sig, N_sig = self.get_kN(
+            df_stats, 
+            numerator_name = ce_row_name, 
+            denominator_name = "No cuts"
+        ) 
+    
+        # Calculate efficiency
+        eff_sig = (k_sig / N_sig) if N_sig > 0 else 0
+        # Calculate poisson uncertainty 
+        eff_sig_err = np.sqrt(k_sig) / N_sig
+    
+        results.append({
+            "Type": "Signal",
+            "Events Passing (k)": k_sig,
+            "Total Events (N)": N_sig,
+            "Efficiency [%]": eff_sig * 100,
+            "Efficiency Error [%]": eff_sig_err * 100
+        })
+    
+        if veto:
+        
+                k_veto, N_veto = None, None 
+        
+                k_veto, N_veto = self.get_kN(
+                    df_stats, 
+                    numerator_name = "unvetoed", 
+                    denominator_name = ce_row_name
+                ) 
+        
+                # Calculate efficiency
+                eff_veto = 1 - (k_veto / N_veto) if N_veto > 0 else 0
+                # Calculate poisson uncertainty 
+                eff_veto_err = np.sqrt(k_veto) / N_veto
+        
+                results.append({
+                    "Type": "Veto",
+                    "Events Passing (k)": k_veto,
+                    "Total Events (N)": N_veto,
+                    "Efficiency [%]": eff_veto * 100,
+                    "Efficiency Error [%]": eff_veto_err * 100
+                })
+
+        self.logger.log(f"Returning efficiency information", "success")
+        
+        return pd.DataFrame(results)
+
+
+    
+    # def get_background_events(self, results, printout=True, out_path=None): 
+    #     """
+    #     Write background event info
+
+    #     Args: 
+    #         results (list): list of results 
+    #         out_path: File path for txt output 
+    #     """
+    #     output = []
+    #     count = 0
+        
+    #     for i, result in enumerate(results): 
+            
+    #         data = ak.Array(result["filtered_data"])
+            
+    #         if len(data) == 0:
+    #             continue
+
+    #         # Get tracker entrance times
+    #         trk_front = self.selector.select_surface(data["trkfit"], sid=0)
+    #         track_time = data["trkfit"]["trksegs"]["time"][trk_front]
+    #         # Get coinc entrance times
+    #         coinc_time = data["crv"]["crvcoincs.time"]
+            
+    #         # Extract values
+    #         track_time_str = "" 
+    #         coinc_time_str = ""
+            
+    #         # Extract floats from track_time (nested structure: [[[values]], [[values]]])
+    #         track_floats = []
+    #         for nested in track_time:
+    #             for sublist in nested:
+    #                 for val in sublist:
+    #                     track_floats.append(float(val))
+            
+    #         # Extract floats from coinc_time (structure: [[], []])
+    #         coinc_floats = []
+    #         for sublist in coinc_time:
+    #             for val in sublist:
+    #                 coinc_floats.append(float(val))
+            
+    #         # Format as strings with precision
+    #         if track_floats:
+    #             track_time_str = ", ".join([f"{val:.6f}" for val in track_floats])
+            
+    #         if coinc_floats:
+    #             coinc_time_str = ", ".join([f"{val:.6f}" for val in coinc_floats])
+        
+    #         # Calculate dt
+    #         dt_str = ""
+    #         if track_floats and coinc_floats:
+    #             # Calculate dt between first track time and first coinc time
+    #             dt_value = abs(track_floats[0] - coinc_floats[0])
+    #             dt_str = f"{dt_value:.6f}"
+            
+    #         output.append(f"  Index:            {i}")
+    #         output.append(f"  Subrun:           {data["evt"]["subrun"]}")
+    #         output.append(f"  Event:            {data["evt"]["event"]}")
+    #         output.append(f"  File:             {result["file_id"]}")
+    #         output.append(f"  Track time [ns]:  {track_time_str}") 
+    #         output.append(f"  Coinc time [ns]:  {coinc_time_str if len(coinc_time_str)>0 else None}") 
+    #         output.append(f"  dt [ns]:          {dt_str if len(dt_str)>0 else "N/A"}")
+    #         output.append("-" * 40)
+
+    #         count += 1
+        
+    #     output = "\n".join(output)
+        
+    #     # Print 
+    #     if printout:
+    #         self.logger.log(f"Info for {count} background events :", "info")
+    #         print(output)
+        
+    #     # Write to file
+    #     if out_path:
+    #         with open(fout_name, "w") as f:
+    #             f.write(output)
+        
+    #         self.logger.log(f"\tWrote {out_path}", "success")
+            
     # # This could be quite nice, but it needs the full analysis config including everything which could be a bit complex. 
     # # Need to think about this. 
             

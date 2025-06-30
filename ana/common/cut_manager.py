@@ -3,6 +3,7 @@
 import json
 import awkward as ak
 import csv
+import pandas as pd
 from pyutils.pylogger import Logger
 
 class CutManager:
@@ -212,12 +213,15 @@ class CutManager:
         
         return stats
     
-    def print_cut_stats(self, data=None, stats=None, progressive=True, active_only=False, csv_name=None):
-        """ Print cut statistics for each cut.
+    def get_cut_stats(self, data=None, stats=None, progressive=True, active_only=False, printout=False):
+        """ Get cut statistics for each cut.
         
         Args:
             data (awkward.Array): Data array
             progressive (bool, optional): If True, apply cuts progressively; if False, apply each cut independently
+            print_info: Print cut stat info
+        Returns:
+            pd.DataFrame containing stats
         """
 
         self.logger.log(f"Printing cut statistics", "max")
@@ -242,57 +246,53 @@ class CutManager:
                     active_stats.append(stat)
             stats = active_stats
 
-        # Print header
-        self.logger.log(f"Cut statistics", "info")
-        print("-" * 110)
-        header = "{:<20} {:<20} {:<20} {:<20} {:<30}".format(
-            "Cut", "Events passing", "Absolute frac. [%]", "Relative frac. [%]", "Description")
-        print(header)
-        print("-" * 110)
-        # Print each cut's statistics
-        for stat in stats:
-            row = "{:<20} {:<20} {:<20.2f} {:<20.2f} {:<30}".format(
-                stat["name"],
-                stat["events_passing"], 
-                stat["absolute_frac"], 
-                stat["relative_frac"], 
-                stat["description"])
-            print(row)
-        print("-" * 110)
-        
-        # Print final statistics
-        if len(stats) > 1:
-            first_events = stats[0]["events_passing"]
-            last_events = stats[-1]["events_passing"]
-            overall_eff = last_events / first_events * 100 if first_events > 0 else 0
+        if printout:
+            # Print header
+            self.logger.log(f"Cut statistics", "info")
+            print("-" * 110)
+            header = "{:<20} {:<20} {:<20} {:<20} {:<30}".format(
+                "Cut", "Events passing", "Absolute frac. [%]", "Relative frac. [%]", "Description")
+            print(header)
+            print("-" * 110)
+            # Print each cut's statistics
+            for stat in stats:
+                row = "{:<20} {:<20} {:<20.2f} {:<20.2f} {:<30}".format(
+                    stat["name"],
+                    stat["events_passing"], 
+                    stat["absolute_frac"], 
+                    stat["relative_frac"], 
+                    stat["description"])
+                print(row)
+            print("-" * 110)
             
-            self.logger.log(f"Summary: {last_events}/{first_events} events remaining ({overall_eff:.2f}%)", "info")
+            # Print final statistics
+            if len(stats) > 1:
+                first_events = stats[0]["events_passing"]
+                last_events = stats[-1]["events_passing"]
+                overall_eff = last_events / first_events * 100 if first_events > 0 else 0
+                
+                self.logger.log(f"Summary: {last_events}/{first_events} events remaining ({overall_eff:.2f}%)", "info")
 
-        # Write to CSV if requested
-        if csv_name:
-            try:
-                with open(csv_name, 'w', newline='') as csv_file:
-                    # Create a CSV writer
-                    writer = csv.writer(csv_file)
-                    
-                    # Write header
-                    writer.writerow(['Cut', 'Active', 'Events Passing', 'Absolute Frac. [%]', 'Relative Frac. [%]', 'Description'])
-                    
-                    # Write data rows
-                    for stat in stats:
-                        writer.writerow([
-                            stat["name"],
-                            stat["active"],
-                            stat["events_passing"],
-                            f"{stat['absolute_frac']:.2f}",
-                            f"{stat['relative_frac']:.2f}",
-                            stat["description"]
-                        ])
-                    
-                    self.logger.log(f"Cut statistics written to {csv_name}", "success")
-
-            except Exception as e:
-                self.logger.log(f"Error writing cut statistics to CSV: {e}", "error")
+        # Return DataFrame
+        try:
+            data = []
+            for stat in stats:
+                data.append({
+                    'Cut': stat["name"],
+                    'Active': stat.get("active", True),
+                    'Events Passing': stat["events_passing"],
+                    'Absolute Frac. [%]': round(stat["absolute_frac"], 2),
+                    'Relative Frac. [%]': round(stat["relative_frac"], 2),
+                    'Description': stat["description"]
+                })
+            
+            df = pd.DataFrame(data)
+            self.logger.log(f"Created cut statistics DataFrame ", "success")
+            return df
+            
+        except Exception as e:
+            self.logger.log(f"Error creating DataFrame: {e}", "error")
+            return None
                 
     def save_cuts(self, file_name):
         """ Save the current cut configuration to a JSON file.
