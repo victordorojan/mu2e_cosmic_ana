@@ -74,31 +74,71 @@ class CutManager:
     #         self.logger.log(f"Cut '{name}' not defined", "error")
     #         return None 
 
-    def toggle_cut(self, cut_names, active=False):
-        """Utility to set cut(s) as inactive or active 
+    # Original method
+    # def toggle_cut(self, cut_names, active=False):
+    #     """Utility to set cut(s) as inactive or active 
     
-        Args: 
-            name (str or list): Name of the cut, or list of cut names
-            active (bool, optional): Whether the cut(s) should be active. Default is True.
-        """
-        # Handle single cut name
-        if isinstance(cut_names, str):
-            cut_names = [cut_names] 
+    #     Args: 
+    #         name (str or list): Name of the cut, or list of cut names
+    #         active (bool, optional): Whether the cut(s) should be active. Default is True.
+    #     """
+    #     # Handle single cut name
+    #     if isinstance(cut_names, str):
+    #         cut_names = [cut_names] 
             
-        # Handle list of cut names
-        elif isinstance(cut_names, list):
-            cut_names = cut_names
-        else:
-            self.logger.log(f"Invalid input type for cut name(s): {type(cut_names)}", "error")
+    #     # Handle list of cut names
+    #     elif isinstance(cut_names, list):
+    #         cut_names = cut_names
+    #     else:
+    #         self.logger.log(f"Invalid input type for cut name(s): {type(cut_names)}", "error")
+    #         return False
+        
+    #     # Process each cut name
+    #     success = True
+    #     bad_cuts = []
+        
+    #     for cut_name in cut_names:
+    #         if cut_name in self.cuts:
+    #             self.cuts[cut_name]["active"] = active
+    #         else:
+    #             bad_cuts.append(cut_name)
+    #             success = False
+        
+    #     # Log results
+    #     if len(bad_cuts) > 0:
+    #         self.logger.log(f"Cut(s) not valid: {bad_cuts}", "error")
+        
+    #     if success:
+    #         action = "activated" if active else "deactivated"
+    #         self.logger.log(f"Successfully {action} cut(s): {cut_names}", "info")
+        
+    #     return success
+
+    def toggle_cut(self, cut_dict):
+        """Utility to set cut(s) as inactive or active based on input dictionary
+        
+        Args: 
+            cut_dict (dict): Dictionary mapping cut names to their desired active state
+                            e.g., {"cut_name_1": False, "cut_name_2": True}
+        """
+        # Validate input type
+        if not isinstance(cut_dict, dict):
+            self.logger.log(f"Invalid input type: expected dict, got {type(cut_dict)}", "error")
             return False
         
-        # Process each cut name
+        # Process each cut name and state
         success = True
         bad_cuts = []
+        activated_cuts = []
+        deactivated_cuts = []
         
-        for cut_name in cut_names:
+        for cut_name, active_state in cut_dict.items():
             if cut_name in self.cuts:
-                self.cuts[cut_name]["active"] = active
+                self.cuts[cut_name]["active"] = active_state
+                if active_state:
+                    activated_cuts.append(cut_name)
+                else:
+                    deactivated_cuts.append(cut_name)
             else:
                 bad_cuts.append(cut_name)
                 success = False
@@ -107,9 +147,11 @@ class CutManager:
         if len(bad_cuts) > 0:
             self.logger.log(f"Cut(s) not valid: {bad_cuts}", "error")
         
-        if success:
-            action = "activated" if active else "deactivated"
-            self.logger.log(f"Successfully {action} cut(s): {cut_names}", "info")
+        if len(activated_cuts) > 0:
+            self.logger.log(f"Successfully activated cut(s): {activated_cuts}", "info")
+        
+        if len(deactivated_cuts) > 0:
+            self.logger.log(f"Successfully deactivated cut(s): {deactivated_cuts}", "info")
         
         return success
     

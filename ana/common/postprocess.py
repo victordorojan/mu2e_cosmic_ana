@@ -20,7 +20,7 @@ class PostProcess():
     def combine_arrays(self, results):
         """Combine filtered arrays from multiple files
         """
-        combined_array = []
+        arrays = []
         
         # Check if we have results
         if not results:
@@ -32,14 +32,17 @@ class PostProcess():
             if len(array) == 0:
                 continue
             # Concatenate arrays
-            combined_array.append(array)
+            arrays.append(array)
             
-        if len(combined_array) == 0:
+        if len(arrays) == 0:
             self.logger.log(f"Combined array has zero length", "warning") 
-        else:
-            self.logger.log(f"Combined arrays, result contains {len(combined_array)} events", "success")
-            
-        return ak.concatenate(combined_array)
+            return arrays
+
+        combined_array = ak.concatenate(arrays)
+        
+        self.logger.log(f"Combined arrays, result contains {len(combined_array)} events", "success")
+
+        return combined_array
 
     def combine_hists(self, results):
         """Combine histograms

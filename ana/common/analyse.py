@@ -223,6 +223,18 @@ class Analyse:
                 description="Loop helix maximum radius (450 < R_max < 680 mm)",
                 mask=within_lhr_max
             )
+
+            # 6.5. Loose loop helix maximum radius
+            within_lhr_max_loose = (data["trkfit"]["trksegpars_lh"]["maxr"] < 680) 
+        
+            # trk-level definition (the actual cut) 
+            within_lhr_max_loose = ak.all(~at_trk_front | within_lhr_max_loose, axis=-1)
+            cut_manager.add_cut(
+                name="within_lhr_max_loose",
+                description="Loop helix maximum radius (R_max < 680 mm)",
+                mask=within_lhr_max_loose,
+                active=False # OFF by default
+            )
             
             # 7. Distance from origin
             within_d0 = (data["trkfit"]["trksegpars_lh"]["d0"] < 100)
@@ -246,6 +258,18 @@ class Analyse:
                 name="within_pitch_angle",
                 description="Extrapolated pitch angle (0.5577350 < tan(theta_Dip) < 1.0)",
                 mask=within_pitch_angle
+            )
+
+            # 8.5. Loose pitch angle
+            within_pitch_angle_loose = (data["trkfit"]["trksegpars_lh"]["tanDip"] < 2.0)
+        
+            # trk-level definition (the actual cut) 
+            within_pitch_angle_loose = ak.all(~at_trk_front | within_pitch_angle_loose, axis=-1)
+            cut_manager.add_cut(
+                name="within_pitch_angle_loose",
+                description="Extrapolated pitch angle (tan(theta_Dip) < 2.0)",
+                mask=within_pitch_angle_loose,
+                active=False # OFF by default
             )
 
             # 9. CRV veto: |dt| < 150 ns (dt = coinc time - track t0) 
@@ -440,14 +464,13 @@ class Analyse:
             self.logger.log(f"Error filling histograms: {e}", "error")
             return None
         
-    def execute(self, data, file_id, inactive_cuts=None):
+    def execute(self, data, file_id, cuts_to_toggle=None):
         """Perform complete analysis on an array
         
         Args:
             data: The data to analyse
             file_id: Identifier for the file
-            cut_names: List of cuts to activate/deactivate
-            active: activate/deactive cuts
+            cuts_to_toggle: Dict of cut name with active state  
             
         Returns:
             dict: Complete analysis results
@@ -470,8 +493,8 @@ class Analyse:
             self.define_cuts(data, cut_manager)
 
             # Set activate cuts
-            if inactive_cuts: 
-                cut_manager.toggle_cut(inactive_cuts, active=False)
+            if cuts_to_toggle: 
+                cut_manager.toggle_cut(cuts_to_toggle) 
             
             # Calculate cut stats
             self.logger.log("Getting cut stats", "max")
@@ -481,7 +504,7 @@ class Analyse:
             self.logger.log("Applying cuts", "max")
 
             # Turn off veto 
-            cut_manager.toggle_cut("unvetoed", active=False)
+            cut_manager.toggle_cut({"unvetoed" : False})
             # Mark CE-like tracks (useful for debugging 
             data["CE_like"] = cut_manager.combine_cuts(active_only=True)
             # Apply cuts
@@ -489,7 +512,7 @@ class Analyse:
             
             # Turn on veto 
             data_CE_unvetoed = None
-            cut_manager.toggle_cut("unvetoed", active=True)
+            cut_manager.toggle_cut({"unvetoed" : True})
             # Mark CE-like tracks (useful for debugging 
             data["unvetoed_CE_like"] = cut_manager.combine_cuts(active_only=True)
             # Apply cuts
