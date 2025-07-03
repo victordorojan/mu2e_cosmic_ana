@@ -189,7 +189,7 @@ class Analyse:
             # data["no_pileup"] = no_pileup
             
             # 3. Minimum hits
-            has_hits = selector.has_n_hits(data["trk"], n_hits=20)
+            has_hits = selector.has_n_hits(data["trk"], n_hits=21)
             cut_manager.add_cut(
                 name="has_hits",
                 description="Minimum of 20 active hits in the tracker",
@@ -564,86 +564,6 @@ class Utils():
         self.printer = Print(verbose=True)
         # Confirm
         self.logger.log(f"Initialised", "info")
-
-    def get_background_events(self, results, printout=True, out_path=None): 
-        """
-        Write background event info
-
-        Args: 
-            results (list): list of results 
-            out_path: File path for txt output 
-        """
-        output = []
-        count = 0
-        
-        for i, result in enumerate(results): 
-            
-            data = ak.Array(result["filtered_data"])
-            
-            if len(data) == 0:
-                continue
-
-            # Get tracker entrance times
-            trk_front = self.selector.select_surface(data["trkfit"], sid=0)
-            track_time = data["trkfit"]["trksegs"]["time"][trk_front]
-            # Get coinc entrance times
-            coinc_time = data["crv"]["crvcoincs.time"]
-            
-            # Extract values
-            track_time_str = "" 
-            coinc_time_str = ""
-            
-            # Extract floats from track_time (nested structure: [[[values]], [[values]]])
-            track_floats = []
-            for nested in track_time:
-                for sublist in nested:
-                    for val in sublist:
-                        track_floats.append(float(val))
-            
-            # Extract floats from coinc_time (structure: [[], []])
-            coinc_floats = []
-            for sublist in coinc_time:
-                for val in sublist:
-                    coinc_floats.append(float(val))
-            
-            # Format as strings with precision
-            if track_floats:
-                track_time_str = ", ".join([f"{val:.6f}" for val in track_floats])
-            
-            if coinc_floats:
-                coinc_time_str = ", ".join([f"{val:.6f}" for val in coinc_floats])
-        
-            # Calculate dt
-            dt_str = ""
-            if track_floats and coinc_floats:
-                # Calculate dt between first track time and first coinc time
-                dt_value = abs(track_floats[0] - coinc_floats[0])
-                dt_str = f"{dt_value:.6f}"
-            
-            output.append(f"  Index:            {i}")
-            output.append(f"  Subrun:           {data["evt"]["subrun"]}")
-            output.append(f"  Event:            {data["evt"]["event"]}")
-            output.append(f"  File:             {result["file_id"]}")
-            output.append(f"  Track time [ns]:  {track_time_str}") 
-            output.append(f"  Coinc time [ns]:  {coinc_time_str if len(coinc_time_str)>0 else None}") 
-            output.append(f"  dt [ns]:          {dt_str if len(dt_str)>0 else "N/A"}")
-            output.append("-" * 40)
-
-            count += 1
-        
-        output = "\n".join(output)
-        
-        # Print 
-        if printout:
-            self.logger.log(f"Info for {count} background events :", "info")
-            print(output)
-        
-        # Write to file
-        if out_path:
-            with open(out_path, "w") as f:
-                f.write(output)
-        
-            self.logger.log(f"Wrote {out_path}", "success")
 
     def get_verbose_background_events(self, data, out_path):
 
