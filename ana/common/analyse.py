@@ -558,13 +558,13 @@ class Utils():
             print_prefix="[PostProcess]",
             verbosity=self.verbosity
         )
-        # Selector 
-        self.selector = Select(verbosity=0)
+        
         # Printer
         self.printer = Print(verbose=True)
         # Confirm
         self.logger.log(f"Initialised", "info")
 
+    # FIXME: does this belong here???
     def get_verbose_background_events(self, data, out_path):
 
         # Redirect stdout to file

@@ -10,6 +10,8 @@ class PostProcess():
         """
         # Verbosity 
         self.verbosity = verbosity
+        # Selector 
+        self.selector = Select(verbosity=0)
         # Start logger
         self.logger = Logger(
             print_prefix="[PostProcess]",
@@ -194,7 +196,7 @@ class PostProcess():
         combined_array = self.combine_arrays(results)
         combined_hists = self.combine_hists(results)
         combined_stats = self.combine_cut_stats(results)
-        combined_background_info = self.get_background_events(results)
+        combined_background_info = None # self.get_background_events(results) # HACK TO STOP IT WRITING GB OF DATA FOR LOOSE CUTS
         
         self.logger.log(f"Postprocessing complete:\n\treturning tuple of combined arrays, combined histograms, and combined cut stats", "success")
         return combined_array, combined_hists, combined_stats, combined_background_info
